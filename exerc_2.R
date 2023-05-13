@@ -1,46 +1,87 @@
-# Carregar o arquivo Volumes.csv
-dados <- read.csv2("/Users/adm/Documents/Repositorios/Pós graduação/Volumes.csv")
+install.packages("mlbench")
+install.packages("e1071")
+install.packages("randomForest")
+install.packages("kernlab")
+install.packages("caret")
+library("mlbench")
+library("e1071")
+library("randomForest")
+library("kernlab")
+library("caret")
+library("neuralnet")
 
-# Eliminar a coluna NR
-dados <- dados[-1,]
+volumes <- read.csv("/Users/adm/Documents/Repositorios/Pós graduação/Volumes.csv", sep=";", dec=",")
+head(volumes)
 
-# Criar partição de dados: treinamento 80%, teste 20%
-library(caret)
-set.seed(123)
-particao <- createDataPartition(dados$VOL, p=0.8, list=FALSE)
-treino <- dados[particao,]
-teste <- dados[-particao,]
+#2 - Eliminar a coluna NR, que só apresenta um número sequencial
+volumes <- volumes[,-1]
+head(volumes)
 
-# Treinar os modelos com o pacote "caret"
-modelo_rf <- train(VOL ~ ., data=treino, method="rf")
-modelo_svm <- train(VOL ~ ., data=treino, method="svmRadial")
-modelo_nn <- train(VOL ~ ., data=treino, method="neuralnet")
+#3 - Criar particao de dados: treinamento 80%, teste 20%
+indices <- createDataPartition(volumes$VOL, p=0.8, list=FALSE)
+treino <- volumes[indices,]
+teste <- volumes[-indices,]
 
-# Modelo alométrico de SPURR
-alom <- nls(VOL ~ b0 + b1*DAP*DAP*HT, dados, start=list(b0=0.5, b1=0.5))
+#4 - Usando o pacote "caret", treinar os modelos: Random Forest (rf), SVM (svmRadial),
+# Redes Neurais (neuralnet) e o modelo alométrico de SPURR
+set.seed(7)
+rf <- train(VOL~., data=treino, method="rf")
+svm <- train(VOL~., data=treino, method="svmRadial")
+rna <- train(VOL~., data = treino, method = "nnet", trace = FALSE, linout = TRUE)
 
-# Efetuar as predições nos dados de teste
-pred_rf <- predict(modelo_rf, newdata=teste)
-pred_svm <- predict(modelo_svm, newdata=teste)
-pred_nn <- predict(modelo_nn, newdata=teste)
-pred_alom <- predict(alom, newdata=teste)
+#5 - O modelo alometrico ? dado por: Volume = b0 + b1 * dap^2 * Ht
+alom <- nls(VOL ~ b0 + b1*DAP*DAP*HT, treino, start=list(b0=0.5, b1=0.5))
 
-# Coeficiente de determinação (R2)
-R2_rf <- cor(teste$VOL, pred_rf)^2
-R2_svm <- cor(teste$VOL, pred_svm)^2
-R2_nn <- cor(teste$VOL, pred_nn)^2
-R2_alom <- cor(teste$VOL, pred_alom)^2
+#6 - Efetue as predicoes nos dados de teste
+predict.rf <- predict(rf, teste)
+predict.svm <- predict(svm, teste)
+predict.rna <- predict(rna, teste)
+predict.alom <- predict(alom, teste)
 
-# Função para calcular as métricas (R2, RMSE e MAE)
-calcular_metricas <- function(obs, pred){
-  r2 <- cor(obs, pred)^2
-  rmse <- sqrt(mean((obs - pred)^2))
-  mae <- mean(abs(obs - pred))
-  return(c(R2=r2, RMSE=rmse, MAE=mae))
+summary(predict.rf)
+summary(predict.svm)
+summary(predict.rna)
+summary(predict.alom)
+
+#7 - Crie funções e calcule as seguintes m?tricas entre a predição e os dados observados
+
+r_squared <- function(modelo, dados, var_resp){
+  y = dados[,var_resp]
+  numerador <- sum((y - predict(modelo, dados))^2)
+  denominador <- sum((y - mean(y))^2)
+  return(1 - (numerador/denominador)) 
 }
 
-# Métricas para os modelos
-metricas_rf <- calcular_metricas(teste$Volume, pred_rf)
-metricas_svm <- calcular_metricas(teste$Volume, pred_svm)
-metricas_nn <- calcular_metricas(teste$Volume, pred_nn)
-metricas_alom <- calcular_metricas(teste$Volume, pred_alom)
+s_xy <- function(modelo, dados, var_resp){
+  y = dados[,var_resp]
+  numerador <- sum((y - predict(modelo, dados))^2)
+  denominador <- length(y) - 2
+  return(sqrt(numerador/denominador))
+}
+
+s_xy_perc <- function(modelo, dados, var_resp){
+  numerador = s_xy(modelo, dados, var_resp)
+  denominador = mean(dados[,var_resp])
+  return(numerador/denominador * 100)
+}
+
+resumo <- function(modelo, dados, var_resp){
+  result <- c()
+  result <- append(result, r_squared(modelo,dados,var_resp), after=length(result))
+  result <- append(result, s_xy(modelo,dados,var_resp), after=length(result))
+  result <- append(result, s_xy_perc(modelo,dados,var_resp), after=length(result))
+  df <- data.frame(t(result), row.names = modelo$"method")
+  colnames(df) <- c("R2", "Sxy", "Sxyp")
+  return(df)
+}
+
+resultados <- resumo(rf, teste, "VOL")
+resultados <- rbind(resultados, resumo(svm, teste, "VOL"))
+resultados <- rbind(resultados, resumo(rna, teste, "VOL"))
+resultados <- rbind(resultados, resumo(alom, teste, "VOL"))
+row.names(resultados)[4] <- "alom"
+resultados
+
+# 8. Escolha o melhor modelo
+
+# alom foi o melhor modelo
